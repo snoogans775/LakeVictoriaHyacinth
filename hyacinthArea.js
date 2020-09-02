@@ -242,7 +242,7 @@ function getArea(image) {
   var area = total.reduceRegion({
     reducer:ee.Reducer.sum(),
     geometry:LAKEVICTORIA,
-    scale:90,
+    scale:30,
     maxPixels: 1e9,
     bestEffort:true,
     tileScale:8
