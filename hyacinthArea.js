@@ -7,28 +7,29 @@
 
 //Set NE study Area
 var FullGulf = LAKEVICTORIA;
-Map.centerObject(FullGulf, 6);
+Map.centerObject(FullGulf, 7);
 
 //Constants
 var DAYS_IN_WEEK = 7;
 var CURRENT = Date.now();
+var REPORT_START_DATE = '2016-01-01';
 
 //Initial Values
 var RANGE = 10;
 
 //Currently Active function
 function displayImage(date, range) {
-  var hyacinth = getLandsatHyacinth(date, range);
-  var waterMask = getWaterMask(LAKEVICTORIA);
-  var maskedImage = hyacinth.image.updateMask(waterMask.image);
+  
+  //Get sum of hyacinth for date range
+  var hyacinthPresence = getLakeMaskedHyacinth(date, range);
+  
+  //Render objects on map
+  display(hyacinthPresence);
   
   //Log the areas calculated using .multiply
-  console.log('Hyacinth Area: ');
-  console.log(getArea(maskedImage));
-  
-  var imageObj = {image:maskedImage, vis: {palette: ['green']}, name: 'Lake Mask'};
-  console.log(imageObj);
-  updateMap(imageObj);
+  console.log(date, 'Hyacinth Area: ');
+  var area = betterGetArea(hyacinthPresence.image);
+  console.log(area.getInfo());
 
 }
 
@@ -42,7 +43,7 @@ exportButton.style().set({position: 'bottom-left'});
 
 //Range selector
 var rangeLabel = ui.Label('Range in Weeks');
-var rangeSlider = ui.Slider(0, 48);
+var rangeSlider = ui.Slider(0, 48, 8);
 rangeLabel.style().set({position: 'bottom-left'});
 rangeSlider.style().set({width: '300px', position: 'bottom-left'});
 
@@ -54,7 +55,7 @@ dateSlider.onChange( function() {
 });
 
 exportButton.onClick( function() {
-  exportImage( getHyacinth(CURRENT, RANGE) );
+  exportImage( getLakeMaskedHyacinth(CURRENT, RANGE) );
 });
 
 rangeSlider.onChange( function() {
@@ -72,18 +73,27 @@ Map.add(rangeSlider);
 // ------ BEGIN GIS FUNCTIONS ------ //
 //
 
+function getLakeMaskedHyacinth(date, range) {
+  var hyacinthObj = getLandsatHyacinth(date, range);
+  var waterMaskObj = getWaterMask(LAKEVICTORIA);
+  var maskedImage = hyacinthObj.image.updateMask(waterMaskObj.image);
+  
+  return {image: maskedImage, vis: hyacinthObj.vis, name: 'Hyacinth Presence'};
+}
+
 function getLandsatHyacinth(date, range) {
+  var startDate = addDays(date, -range);
+  var endDate = date;
   
   // import landsat imagery
   var completeLandsat8 = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR");
   
+  
   //filter landsat imagery
   var ls8 = completeLandsat8
-   .filter(ee.Filter.date(addDays(date, -range), date))
-   //filter Gulf Boundary
-   .filterBounds(FullGulf)
+   .filter(ee.Filter.date(startDate, endDate))
    //Clip Gulf Boundary
-   .map( function(image){return image.clip(FullGulf)} );
+   .map( function(image){return image.clip(LAKEVICTORIA)} );
   
   //Create a band to serve as a Hyacinth Determination based on NDVI greater than 0.4
   // @params Image Landsat 8 Image
@@ -91,7 +101,6 @@ function getLandsatHyacinth(date, range) {
   //Create a band to serve as a Hyacinth Determination based on VH value greater than -23
   var HycDet = function(image){
     var cutoffNDVI = 0.4;
-
     var imageWithNDVI = addNDVI(image);
     var NDVI = imageWithNDVI.select(['NDVI']);
     return image.addBands(ee.Image(1).updateMask(NDVI.gte(cutoffNDVI)).rename('Hyacinth'));
@@ -99,6 +108,7 @@ function getLandsatHyacinth(date, range) {
   
   //create new image collection with filtered NDVI
   var finalHyc = ls8.map(HycDet);
+  
   
   //create sum presence of hyacinth
   var hycdet = finalHyc.sum();
@@ -111,7 +121,7 @@ function getLandsatHyacinth(date, range) {
     palette: ['green', 'white']
   };
   
-  return {image: hycdet.select('Hyacinth'), visParm: visParm, name: 'Distribution'};
+  return {image: hycdet.select('Hyacinth'), vis: visParm, name: 'Presence of Hyacinth'};
   
 }
 
@@ -193,12 +203,13 @@ function getSentinelHyacinth(date, range) {
 }
 
 function getWaterMask(feature) {
-  var dataset = ee.ImageCollection("MODIS/006/MOD44W")
-    .filterBounds(feature);
-  var waterMask = dataset.select('water_mask').first().eq(1);
+  var dataset = ee.Image('USGS/SRTMGL1_003');
+  
+  var waterMask = dataset.updateMask(dataset.eq(1134))
+    .gt(0);
+  
   var waterMaskVis = {
-  min: 0.0,
-  max: 1,
+  palette: ['red', 'white']
   };
   
   return {image: waterMask, vis: waterMaskVis, name: 'waterMask'};
@@ -214,9 +225,9 @@ function exportImage(inputImage, name) {
     image: inputImage,
     description: name,
     maxPixels: 1e13,
-    crs: "EPSG:3857",
+    crs: "EPSG:4326",
     scale: 10,
-    region: FullGulf,
+    region: LAKEVICTORIA,
     fileFormat: 'GeoTIFF',
   })
 }
@@ -232,7 +243,7 @@ function parseUTC(timestamp) {
   return date;
 }
 
-function updateMap(image) {
+function display(image) {
   Map.addLayer(image.image, image.vis, image.name);
 }
 
@@ -245,7 +256,17 @@ function getArea(image) {
     scale:30,
     maxPixels: 1e9,
     bestEffort:true,
-    tileScale:8
+  });
+  var areaPixels = ee.Number(area);
+  return areaPixels;
+}
+
+function betterGetArea(image) {
+  var area = image.reduceRegion({
+    reducer:ee.Reducer.sum(),
+    geometry:LAKEVICTORIA,
+    scale:30,
+    maxPixels: 2e9
   });
   var areaPixels = ee.Number(area);
   return areaPixels;
